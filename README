@@ -1,0 +1,15 @@
+certcheck: Check the expiry date of SSL certificates
+
+Usage:
+  certcheck <file> [options]
+Options:
+  --help      Print help
+  --swiftbar  Print a SwiftBar plugin script instead of checking now
+
+The file contains one site per line, with an optional port number. If no port
+number is given, 443 is used. Comments are allowed and start with a #. Example:
+
+    # This is a comment
+    example.com
+    example.net 8443
+    another.example.com # more comments

@@ -1,0 +1,167 @@
+#! /bin/sh
+
+usage()
+{
+	progname=$(basename "$0")
+	echo "$progname: Check the expiry date of SSL certificates"
+	echo
+	echo "Usage:"
+	echo "  $progname <file> [options]"
+	echo "Options:"
+	echo "  --help      Print help"
+	echo "  --swiftbar  Print a SwiftBar plugin script instead of checking now"
+}
+
+help()
+{
+	cat <<EOF
+The file contains one site per line, with an optional port number. If no port
+number is given, 443 is used. Comments are allowed and start with a #. Example:
+
+    # This is a comment
+    example.com
+    example.net 8443
+    another.example.com # more comments
+EOF
+}
+
+# maybe I should learn how to use getopts
+find_file_arg()
+{
+	while [ "$#" -gt 0 ]
+	do
+		case "$1" in
+			-*)
+				shift
+				;;
+			*)
+				echo "$1"
+				return
+				;;
+		esac
+	done
+}
+
+sitefile=$(find_file_arg "$@")
+
+assert_file()
+{
+	if [ "$sitefile" = "" ]
+	then
+		echo "No file specified"
+		usage
+		exit 1
+	fi
+}
+
+# maybe I should learn how to use getopts
+case "$*" in
+	*--help*)
+		usage
+		echo
+		help
+		exit 0
+		;;
+	*--swiftbar*)
+		assert_file
+		fullpath=$(realpath "$sitefile")
+		cat <<EOF
+Put this in a file named certcheck.1d.sh in your SwiftBar plugins folder:
+
+#! /bin/sh
+
+echo "Cert Expiry"
+echo "---"
+
+certcheck $fullpath
+EOF
+		exit 0
+		;;
+esac
+
+assert_file
+
+if command -v gdate > /dev/null
+then
+	datecmd="gdate"
+else
+	datecmd="date"
+fi
+
+if ! $datecmd --version | grep -q GNU
+then
+	echo "Please install GNU date"
+	exit 1
+fi
+
+green()
+{
+	if [ "$SWIFTBAR" = "1" ]
+	then
+		printf "🟢 %s\n" "$1"
+		return
+	fi
+	printf "\033[32m%s\033[0m\n" "$1"
+}
+
+orange()
+{
+	if [ "$SWIFTBAR" = "1" ]
+	then
+		printf "🟠 %s\n" "$1"
+		return
+	fi
+	printf "\033[33m%s\033[0m\n" "$1"
+}
+
+red()
+{
+	if [ "$SWIFTBAR" = "1" ]
+	then
+		printf "🔴 %s\n" "$1"
+		return
+	fi
+	printf "\033[31m%s\033[0m\n" "$1"
+}
+
+# shellcheck disable=SC2002
+cat "$sitefile" | sed 's/#.*//' | while read -r site port
+do
+	if [ "$site" = "" ]
+	then
+		continue
+	fi
+
+	if [ "$port" = "" ]
+	then
+		port=443
+	fi
+
+	cert=$(echo | openssl s_client -servername "$site" -connect "$site:$port" 2>/dev/null)
+	date=$(echo "$cert" | openssl x509 -noout -dates | grep notAfter | sed 's/notAfter=//')
+
+	if [ "$date" = "" ]
+	then
+		red "Cannot find cert for $site"
+		continue
+	fi
+
+	# convert date to seconds so we can calculate the difference
+	date=$($datecmd -d "$date" "+%Y-%m-%d")
+	seconds_left=$(echo "$($datecmd -d "$date" "+%s") - $($datecmd "+%s")" | bc)
+	days_left=$(echo "$seconds_left / 60 / 60 / 24" | bc)
+
+	if [ "$days_left" -lt 7 ]
+	then
+		red "($days_left days) $site"
+		continue
+	fi
+	if [ "$days_left" -lt 30 ]
+	then
+		orange "($days_left days) $site"
+		continue
+	fi
+
+	green "($days_left days) $site"
+done
+
