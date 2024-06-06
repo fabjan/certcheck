@@ -70,9 +70,6 @@ Put this in a file named certcheck.1d.sh in your SwiftBar plugins folder:
 
 #! /bin/sh
 
-echo "Cert Expiry"
-echo "---"
-
 certcheck $fullpath
 EOF
 		exit 0
@@ -120,43 +117,67 @@ red() {
 }
 
 # shellcheck disable=SC2002
-cat "$sitefile" | sed 's/#.*//' | while read -r site port
-do
-	if [ "$site" = "" ]
+do_checks()
+{
+	cat "$sitefile" | sed 's/#.*//' | while read -r site port
+	do
+		if [ "$site" = "" ]
+		then
+			continue
+		fi
+
+		if [ "$port" = "" ]
+		then
+			port=443
+		fi
+
+		cert=$(echo | openssl s_client -servername "$site" -connect "$site:$port" 2>/dev/null)
+		date=$(echo "$cert" | openssl x509 -noout -dates | grep notAfter | sed 's/notAfter=//')
+
+		if [ "$date" = "" ]
+		then
+			red "Cannot find cert for $site"
+			continue
+		fi
+
+		# convert date to seconds so we can calculate the difference
+		date=$($datecmd -d "$date" "+%Y-%m-%d")
+		seconds_left=$(echo "$($datecmd -d "$date" "+%s") - $($datecmd "+%s")" | bc)
+		days_left=$(echo "$seconds_left / 60 / 60 / 24" | bc)
+
+		if [ "$days_left" -lt 7 ]
+		then
+			red "($days_left days) $site"
+			continue
+		fi
+		if [ "$days_left" -lt 30 ]
+		then
+			orange "($days_left days) $site"
+			continue
+		fi
+
+		green "($days_left days) $site"
+	done
+}
+
+result=$(do_checks)
+if [ "$SWIFTBAR" = "1" ]
+then
+	printf "certcheck "
+	greens=$(echo "$result" | grep -c "🟢")
+	oranges=$(echo "$result" | grep -c "🟠")
+	reds=$(echo "$result" | grep -c "🔴")
+	if [ "$reds" -gt 0 ]
 	then
-		continue
-	fi
-
-	if [ "$port" = "" ]
+		printf "🔴 %d " "$reds"
+	elif [ "$oranges" -gt 0 ]
 	then
-		port=443
+		printf "🟠 %d " "$oranges"
+	else
+		printf "🟢 %d" "$greens"
 	fi
-
-	cert=$(echo | openssl s_client -servername "$site" -connect "$site:$port" 2>/dev/null)
-	date=$(echo "$cert" | openssl x509 -noout -dates | grep notAfter | sed 's/notAfter=//')
-
-	if [ "$date" = "" ]
-	then
-		red "Cannot find cert for $site"
-		continue
-	fi
-
-	# convert date to seconds so we can calculate the difference
-	date=$($datecmd -d "$date" "+%Y-%m-%d")
-	seconds_left=$(echo "$($datecmd -d "$date" "+%s") - $($datecmd "+%s")" | bc)
-	days_left=$(echo "$seconds_left / 60 / 60 / 24" | bc)
-
-	if [ "$days_left" -lt 7 ]
-	then
-		red "($days_left days) $site"
-		continue
-	fi
-	if [ "$days_left" -lt 30 ]
-	then
-		orange "($days_left days) $site"
-		continue
-	fi
-
-	green "($days_left days) $site"
-done
-
+	printf "\n---\n"
+	echo "$result"
+else
+	echo "$result"
+fi
